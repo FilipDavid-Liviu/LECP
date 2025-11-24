@@ -1,0 +1,25 @@
+import os
+
+BASE_DIR = "data"
+OUTPUT_DIR = os.path.join(BASE_DIR, "processed_indices")
+
+DATA_FILES = {
+    "pre_fire": {
+        "B04": "T29TNE_20170604T112121_B04_10m.jp2",
+        "B08": "T29TNE_20170604T112121_B08_10m.jp2",
+        "B12": "T29TNE_20170604T112121_B12_20m.jp2",
+        "SCL": "T29TNE_20170604T112121_SCL_20m.jp2"
+    },
+    "post_fire": {
+        "B04": "T29TNE_20170704T112111_B04_10m.jp2",
+        "B08": "T29TNE_20170704T112111_B08_10m.jp2",
+        "B12": "T29TNE_20170704T112111_B12_20m.jp2",
+        "SCL": "T29TNE_20170704T112111_SCL_20m.jp2"
+    },
+    "recovery": {
+        "B04": "T29TNE_20200628T112121_B04_10m.jp2",
+        "B08": "T29TNE_20200628T112121_B08_10m.jp2",
+        "B12": "T29TNE_20200628T112121_B12_20m.jp2",
+        "SCL": "T29TNE_20200628T112121_SCL_20m.jp2"
+    }
+}

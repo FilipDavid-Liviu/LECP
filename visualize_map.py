@@ -1,6 +1,7 @@
 import matplotlib
+from sklearn.metrics import mean_squared_error, r2_score
 
-matplotlib.use('Agg')
+matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -9,22 +10,25 @@ from sklearn.ensemble import RandomForestRegressor
 from numpy.lib.stride_tricks import sliding_window_view
 import config
 import os
+import copy
 
 # --- SETTINGS ---
 WINDOW_SIZE = 2000
 SEED = 42
 
 # --- CHOOSE YOUR FIGHTERS ---
-# Available: "Standard" (RBR Only), "Control3" (RBR+PreNBR), "LECP" (Patches)
-MODEL_A_NAME = "Control3"
-MODEL_B_NAME = "LECP"
+MODEL_A_NAME = "Control3"  # The Control Group
+MODEL_B_NAME = "LECP"  # The Model with Patches
 
 
 def read_tif(filename):
     path = os.path.join(config.OUTPUT_DIR, filename)
     with rasterio.open(path) as src:
         data = src.read(1).astype('float32')
+        # Treat infinity as NaN (often used for clouds/borders)
         data[np.isinf(data)] = np.nan
+        # If your TIF uses a specific negative number for clouds (e.g. -9999), add that here:
+        # data[data < -1] = np.nan
         return data, src.profile
 
 
@@ -35,46 +39,33 @@ def get_sliding_windows(image, window_size=3):
     return windows
 
 
-# --- 1. ABSTRACT DATA LOADER (For Training) ---
+# --- 1. DATA LOADER ---
 def get_training_data(df, model_type):
-    """Returns X and y for the specific model type."""
     y = df['Target_RecoveryNDVI']
 
-    if model_type == "Standard":
-        # Control 1: RBR Only
-        X = df[['Control_RBR']]
-
-    elif model_type == "Control3":
-        # Control 3: RBR + PreNBR (Pixel Level)
+    if model_type == "Control3":
         X = df[['Control_RBR', 'Control_PreNBR']]
-
     elif model_type == "LECP":
-        # Control 4: Full Patches
-        # Drop known control columns to leave only patch features
         drop_cols = ['Target_RecoveryNDVI', 'Control_RBR', 'Control_PreNBR', 'Control_PostNBR']
         X = df.drop(columns=[c for c in df.columns if c in drop_cols])
-
     else:
         raise ValueError(f"Unknown model type: {model_type}")
-
     return X, y
 
 
-# --- 2. ABSTRACT TRAINER ---
+# --- 2. TRAINER ---
 def train_specific_model(model_type):
     print(f"--- Training {model_type} ---")
     data_path = os.path.join(config.BASE_DIR, "training_dataset.csv")
     df = pd.read_csv(data_path)
-
     X, y = get_training_data(df, model_type)
 
-    # Use consistent RF settings
     rf = RandomForestRegressor(n_estimators=50, n_jobs=-1, max_depth=10, random_state=SEED)
     rf.fit(X, y)
     return rf
 
 
-# --- 3. ABSTRACT RASTER FEATURE PREPARATION ---
+# --- 3. FEATURE PREPARATION ---
 def prepare_raster_features(crop_rbr, crop_pre_nbr, model_type):
     """
     Transforms raw raster crops into the correct shape (N_samples, N_features)
@@ -86,111 +77,182 @@ def prepare_raster_features(crop_rbr, crop_pre_nbr, model_type):
 
     H, W = input_rbr.shape
 
-    if model_type == "Standard":
-        # Needs (N, 1) -> Just RBR
-        return input_rbr.reshape(-1, 1)
-
-    elif model_type == "Control3":
-        # Needs (N, 2) -> RBR col, PreNBR col
+    if model_type == "Control3":
+        # Training data was: df[['Control_RBR', 'Control_PreNBR']]
+        # So we must stack RBR then Pre
         flat_rbr = input_rbr.reshape(-1, 1)
         flat_pre = input_pre.reshape(-1, 1)
         return np.hstack([flat_rbr, flat_pre])
 
     elif model_type == "LECP":
-        # Needs (N, 18) -> 9 Pre Patches + 9 RBR Patches
+        # 1. Get Sliding Windows (Shape: H, W, 3, 3)
         patches_pre = get_sliding_windows(input_pre, 3)
         patches_rbr = get_sliding_windows(input_rbr, 3)
 
+        # 2. Flatten the 3x3 window into 9 features per pixel
+        # Shape becomes: (N_pixels, 9)
         flat_pre_patches = patches_pre.reshape(H * W, 9)
         flat_rbr_patches = patches_rbr.reshape(H * W, 9)
-        return np.hstack([flat_pre_patches, flat_rbr_patches])
+
+        # --- THE FIX ---
+        # The CSV was built interleaved: Pre_0, RBR_0, Pre_1, RBR_1...
+        # We must replicate that structure.
+
+        # Stack them along a new axis -> (N_pixels, 9, 2)
+        # Axis 2, index 0 is Pre, index 1 is RBR
+        stacked = np.stack([flat_pre_patches, flat_rbr_patches], axis=2)
+
+        # Reshape to flatten the last two dimensions -> (N_pixels, 18)
+        # This forces the order: Pre0, RBR0, Pre1, RBR1...
+        return stacked.reshape(H * W, 18)
+
+
+# --- 4. VISUALIZATION HELPER ---
+def save_single_map(data, title, filename, vmin=0, vmax=0.8):
+    """
+    Saves a single generic map with the RdYlGn colormap.
+    NaNs are rendered as Grey to represent Clouds/No-Data.
+    """
+    plt.figure(figsize=(10, 10))
+
+    # Create a copy of the colormap to modify bad value color
+    cmap = copy.copy(plt.cm.RdYlGn)
+    cmap.set_bad(color='lightgrey')  # This makes NaNs/Clouds Grey
+
+    plt.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax)
+    plt.title(title, fontsize=15)
+    plt.axis('off')
+
+    # Add a colorbar
+    cbar = plt.colorbar(shrink=0.8)
+    cbar.set_label('NDVI Recovery')
+
+    out_path = os.path.join(config.BASE_DIR, filename)
+    plt.savefig(out_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {filename}")
 
 
 def main():
-    # 1. Train the two chosen models
-    model_a = train_specific_model(MODEL_A_NAME)
-    model_b = train_specific_model(MODEL_B_NAME)
+    # 1. Train & Load
+    model_control = train_specific_model(MODEL_A_NAME)
+    model_lecp = train_specific_model(MODEL_B_NAME)
 
-    # 2. Load Full Rasters
-    print("--- Loading Full Satellite Images ---")
-    pre_nbr, profile = read_tif("PreFire_NBR.tif")
+    print("--- Loading & Cropping Data ---")
+    pre_nbr, _ = read_tif("PreFire_NBR.tif")
     rec_ndvi, _ = read_tif("Recovery_NDVI.tif")
     post_nbr, _ = read_tif("PostFire_NBR.tif")
 
     dnbr = pre_nbr - post_nbr
     rbr_full = dnbr / (pre_nbr + 1.001)
 
-    # 3. Locate Fire Center
-    print("--- Locating Fire Center ---")
+    # Locate Fire Center
     valid_burns = np.argwhere(rbr_full > 0.2)
-
     if len(valid_burns) == 0:
-        print("Error: No fire found! Using image center.")
         center_r, center_c = pre_nbr.shape[0] // 2, pre_nbr.shape[1] // 2
     else:
         center_r, center_c = valid_burns.mean(axis=0).astype(int)
 
-    # Crop Window
     half = WINDOW_SIZE // 2
-    r_start = max(0, center_r - half)
-    r_end = min(pre_nbr.shape[0], center_r + half)
-    c_start = max(0, center_c - half)
-    c_end = min(pre_nbr.shape[1], center_c + half)
+    r_start, r_end = max(0, center_r - half), min(pre_nbr.shape[0], center_r + half)
+    c_start, c_end = max(0, center_c - half), min(pre_nbr.shape[1], center_c + half)
 
-    print(f"Cropping Window: {r_end - r_start}x{c_end - c_start}...")
     crop_pre_nbr = pre_nbr[r_start:r_end, c_start:c_end]
     crop_rbr = rbr_full[r_start:r_end, c_start:c_end]
     crop_actual = rec_ndvi[r_start:r_end, c_start:c_end]
-
     H, W = crop_rbr.shape
 
-    # 4. Prepare Features & Predict
-    print(f"--- Predicting with {MODEL_A_NAME} ---")
-    feats_a = prepare_raster_features(crop_rbr, crop_pre_nbr, MODEL_A_NAME)
-    pred_a = model_a.predict(feats_a).reshape(H, W)
+    # 2. Predict
+    print(f"--- Predicting... ---")
+    feats_cntrl = prepare_raster_features(crop_rbr, crop_pre_nbr, MODEL_A_NAME)
+    pred_control = model_control.predict(feats_cntrl).reshape(H, W)
 
-    print(f"--- Predicting with {MODEL_B_NAME} ---")
-    feats_b = prepare_raster_features(crop_rbr, crop_pre_nbr, MODEL_B_NAME)
-    pred_b = model_b.predict(feats_b).reshape(H, W)
+    feats_lecp = prepare_raster_features(crop_rbr, crop_pre_nbr, MODEL_B_NAME)
+    pred_lecp = model_lecp.predict(feats_lecp).reshape(H, W)
 
-    # 5. Calculate Difference
-    mask = (crop_rbr < 0.1)
+    # 3. Masking & Metric Calculation
+    print("--- Calculating Metrics & Improvement ---")
 
-    err_a = np.abs(pred_a - crop_actual)
-    err_b = np.abs(pred_b - crop_actual)
+    # Strict Mask: Clouds in Ground Truth OR Clouds in Pre-fire OR Unburnt areas
+    strict_mask = np.isnan(crop_actual) | (crop_rbr < 0.1) | np.isnan(crop_pre_nbr)
 
-    # Positive Value = Model B (LECP) has lower error
-    improvement_map = err_a - err_b
+    # Apply mask to copies for calculation
+    pred_control_masked = pred_control.copy()
+    pred_lecp_masked = pred_lecp.copy()
+    actual_masked = crop_actual.copy()
 
-    # Apply Mask
-    improvement_map[mask] = np.nan
-    pred_b[mask] = np.nan
+    pred_control_masked[strict_mask] = np.nan
+    pred_lecp_masked[strict_mask] = np.nan
+    actual_masked[strict_mask] = np.nan
 
-    # 6. Visualization
-    print("--- Saving Comparison Map ---")
-    plt.figure(figsize=(15, 5))
+    # Flatten arrays and remove NaNs for Scikit-Learn metrics
+    # (Scikit-learn cannot handle NaNs, so we must compress the arrays)
+    valid_idx = ~np.isnan(actual_masked.flatten())
 
-    plt.subplot(1, 3, 1)
-    plt.title(f"{MODEL_A_NAME} Error\n(Darker = Worse)")
-    plt.imshow(err_a, cmap='Greys', vmin=0, vmax=0.4)
-    plt.axis('off')
+    y_true = actual_masked.flatten()[valid_idx]
+    y_pred_ctrl = pred_control_masked.flatten()[valid_idx]
+    y_pred_lecp = pred_lecp_masked.flatten()[valid_idx]
 
-    plt.subplot(1, 3, 2)
-    plt.title(f"{MODEL_B_NAME} Error\n(Darker = Worse)")
-    plt.imshow(err_b, cmap='Greys', vmin=0, vmax=0.4)
-    plt.axis('off')
+    # --- PRINT RESULTS TO CONSOLE ---
+    rmse_ctrl = np.sqrt(mean_squared_error(y_true, y_pred_ctrl))
+    rmse_lecp = np.sqrt(mean_squared_error(y_true, y_pred_lecp))
+    r2_ctrl = r2_score(y_true, y_pred_ctrl)
+    r2_lecp = r2_score(y_true, y_pred_lecp)
 
-    plt.subplot(1, 3, 3)
-    plt.title(f"Improvement: {MODEL_B_NAME} vs {MODEL_A_NAME}\n(Green = {MODEL_B_NAME} Wins)")
-    # PiYG: Pink (Negative/Model A wins) <-> Green (Positive/Model B wins)
-    plt.imshow(improvement_map, cmap='PiYG', vmin=-0.15, vmax=0.15)
-    plt.colorbar(label="Error Reduction")
-    plt.axis('off')
+    print("\n" + "=" * 40)
+    print(f" RESULTS SUMMARY (Pixels: {len(y_true)})")
+    print("=" * 40)
+    print(f"{'METRIC':<10} | {MODEL_A_NAME:<12} | {MODEL_B_NAME:<12} | {'DELTA':<10}")
+    print("-" * 52)
+    print(f"{'RMSE':<10} | {rmse_ctrl:.5f}       | {rmse_lecp:.5f}       | {rmse_ctrl - rmse_lecp:+.5f}")
+    print(f"{'R2':<10}   | {r2_ctrl:.5f}       | {r2_lecp:.5f}       | {r2_lecp - r2_ctrl:+.5f}")
+    print("=" * 40 + "\n")
+    # --------------------------------
 
-    plt.tight_layout()
-    out_file = os.path.join(config.BASE_DIR, f"map_compare_{MODEL_A_NAME}_vs_{MODEL_B_NAME}.png")
-    plt.savefig(out_file, dpi=300)
-    print(f"Map saved to: {out_file}")
+    # 4. Improvement Map Calculation
+    # We use the masked versions we created above
+    abs_err_control = np.abs(pred_control_masked - crop_actual)
+    abs_err_lecp = np.abs(pred_lecp_masked - crop_actual)
+    improvement_map = abs_err_control - abs_err_lecp
+
+    # 5. Generate Images
+    print("--- Saving Images ---")
+    VMIN_NDVI, VMAX_NDVI = 0.0, 0.8
+
+    # Save Images 1, 2, 3
+    save_single_map(actual_masked, "Actual Recovery (Ground Truth)", "1_Actual_Recovery.png", VMIN_NDVI, VMAX_NDVI)
+    save_single_map(pred_control_masked, f"Prediction: {MODEL_A_NAME}", "2_Control_Prediction.png", VMIN_NDVI,
+                    VMAX_NDVI)
+    save_single_map(pred_lecp_masked, f"Prediction: {MODEL_B_NAME}", "3_LECP_Prediction.png", VMIN_NDVI, VMAX_NDVI)
+
+    # Save Image 4 (Comparison)
+    fig, axes = plt.subplots(1, 2, figsize=(18, 8))
+    IMP_LIM = 0.15
+
+    # Left: Prediction
+    cmap_pred = copy.copy(plt.cm.RdYlGn)
+    cmap_pred.set_bad(color='lightgrey')
+    im1 = axes[0].imshow(pred_lecp_masked, cmap=cmap_pred, vmin=VMIN_NDVI, vmax=VMAX_NDVI)
+    axes[0].set_title(f"Prediction: {MODEL_B_NAME}\nRMSE: {rmse_lecp:.4f}", fontsize=14, fontweight='bold')
+    axes[0].axis('off')
+    cbar1 = fig.colorbar(im1, ax=axes[0], shrink=0.7, orientation='horizontal', pad=0.05)
+    cbar1.set_label("Predicted NDVI")
+
+    # Right: Improvement
+    cmap_imp = copy.copy(plt.cm.PiYG)
+    cmap_imp.set_bad(color='lightgrey')
+    im2 = axes[1].imshow(improvement_map, cmap=cmap_imp, vmin=-IMP_LIM, vmax=IMP_LIM)
+    axes[1].set_title(f"Improvement over {MODEL_A_NAME}\n(RMSE Improvement: {rmse_ctrl - rmse_lecp:.4f})", fontsize=14,
+                      fontweight='bold')
+    axes[1].axis('off')
+    cbar2 = fig.colorbar(im2, ax=axes[1], shrink=0.7, orientation='horizontal', pad=0.05)
+    cbar2.set_label("Error Reduction (Green = Better)")
+
+    plt.suptitle(f"Model Analysis: {MODEL_B_NAME} Performance", fontsize=20, y=0.95)
+    out_file = os.path.join(config.BASE_DIR, "4_LECP_Analysis.png")
+    plt.savefig(out_file, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Analysis saved to: {out_file}")
 
 
 if __name__ == "__main__":

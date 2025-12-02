@@ -60,7 +60,13 @@ def train_specific_model(model_type):
     df = pd.read_csv(data_path)
     X, y = get_training_data(df, model_type)
 
-    rf = RandomForestRegressor(n_estimators=50, n_jobs=-1, max_depth=10, random_state=SEED)
+    rf = RandomForestRegressor(
+        n_estimators=100,
+        n_jobs=-1,
+        max_depth=25,  # Restricts depth slightly to prevent pure memorization
+        min_samples_leaf=4,  # Requires at least 4 pixels to agree before making a rule
+        random_state=SEED
+    )
     rf.fit(X, y)
     return rf
 

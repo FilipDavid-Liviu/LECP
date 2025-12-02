@@ -121,25 +121,25 @@ def main():
     # --- TRAIN & EVALUATE ---
 
     print("\nTraining Control 1 (RBR Only)...")
-    rf1 = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=SEED)
+    rf1 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
     rf1.fit(X_train_c1, y_train)
     pred1 = rf1.predict(X_test_c1)
     evaluate_model(y_test, pred1, "Control 1 (RBR Only)")
 
     print("\nTraining Control 2 (PreNBR Only)...")
-    rf2 = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=SEED)
+    rf2 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
     rf2.fit(X_train_c2, y_train)
     pred2 = rf2.predict(X_test_c2)
     evaluate_model(y_test, pred2, "Control 2 (PreNBR Only)")
 
     print("\nTraining Control 3 (Pixel Combo)...")
-    rf3 = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=SEED)
+    rf3 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
     rf3.fit(X_train_c3, y_train)
     pred3 = rf3.predict(X_test_c3)
     evaluate_model(y_test, pred3, "Control 3 (RBR + PreNBR)")
 
     print("\nTraining Control 4 (LECP)...")
-    rf4 = RandomForestRegressor(n_estimators=100, n_jobs=-1, random_state=SEED)
+    rf4 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4,random_state=SEED)
     rf4.fit(X_train_c4, y_train)
     pred4 = rf4.predict(X_test_c4)
     evaluate_model(y_test, pred4, "Control 4 (LECP)")

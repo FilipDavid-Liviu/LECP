@@ -6,14 +6,12 @@ from numpy.lib.stride_tricks import sliding_window_view
 import config
 
 # --- CONFIGURATION ---
-# How many random pixels to sample for the model?
-# Too many = memory crash. 50,000 is usually enough for a strong Random Forest.
 SAMPLE_SIZE = 50000
-BURN_THRESHOLD = 0.05
+BURN_THRESHOLD = 0.1
 
 
 def read_tif(filename):
-    path = os.path.join(config.OUTPUT_DIR, filename)
+    path = os.path.join(config.TIF_DIR, filename)
     with rasterio.open(path) as src:
         data = src.read(1).astype('float32')
         data[np.isinf(data)] = np.nan
@@ -117,6 +115,6 @@ if __name__ == "__main__":
 
     df = df.dropna()
 
-    output_path = os.path.join(config.BASE_DIR, "training_dataset.csv")
+    output_path = os.path.join(config.TIF_DIR, "training_dataset.csv")
     df.to_csv(output_path, index=False)
     print(f"Success! Dataset with Extra Control saved to: {output_path}")

@@ -1,49 +1,32 @@
 import matplotlib
 from sklearn.metrics import mean_squared_error, r2_score
-
-matplotlib.use('Agg')  # Non-interactive backend
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import rasterio
 from sklearn.ensemble import RandomForestRegressor
-from numpy.lib.stride_tricks import sliding_window_view
 import config
 import os
 import copy
+from feature_engineering import read_tif, get_sliding_windows
+matplotlib.use('Agg')
 
-# --- SETTINGS ---
+# --- CONFIGURATION ---
 WINDOW_SIZE = 2000
 SEED = 42
 
-# --- CHOOSE YOUR FIGHTERS ---
-MODEL_A_NAME = "Control3"  # The Control Group
-MODEL_B_NAME = "LECP"  # The Model with Patches
-
-
-def read_tif(filename):
-    path = os.path.join(config.OUTPUT_DIR, filename)
-    with rasterio.open(path) as src:
-        data = src.read(1).astype('float32')
-        # Treat infinity as NaN (often used for clouds/borders)
-        data[np.isinf(data)] = np.nan
-        # If your TIF uses a specific negative number for clouds (e.g. -9999), add that here:
-        # data[data < -1] = np.nan
-        return data, src.profile
-
-
-def get_sliding_windows(image, window_size=3):
-    pad = window_size // 2
-    padded_image = np.pad(image, pad_width=pad, mode='reflect')
-    windows = sliding_window_view(padded_image, window_shape=(window_size, window_size))
-    return windows
+MODEL_A_NAME = "Control3"
+MODEL_B_NAME = "LECP"
 
 
 # --- 1. DATA LOADER ---
 def get_training_data(df, model_type):
     y = df['Target_RecoveryNDVI']
 
-    if model_type == "Control3":
+    if model_type == "Control1":
+        X = df[['Control_RBR']]
+    elif model_type == "Control2":
+        X = df[['Control_PreNBR']]
+    elif model_type == "Control3":
         X = df[['Control_RBR', 'Control_PreNBR']]
     elif model_type == "LECP":
         drop_cols = ['Target_RecoveryNDVI', 'Control_RBR', 'Control_PreNBR', 'Control_PostNBR']
@@ -56,7 +39,7 @@ def get_training_data(df, model_type):
 # --- 2. TRAINER ---
 def train_specific_model(model_type):
     print(f"--- Training {model_type} ---")
-    data_path = os.path.join(config.BASE_DIR, "training_dataset.csv")
+    data_path = os.path.join(config.TIF_DIR, "training_dataset.csv")
     df = pd.read_csv(data_path)
     X, y = get_training_data(df, model_type)
 
@@ -133,7 +116,7 @@ def save_single_map(data, title, filename, vmin=0, vmax=0.8):
     cbar = plt.colorbar(shrink=0.8)
     cbar.set_label('NDVI Recovery')
 
-    out_path = os.path.join(config.BASE_DIR, filename)
+    out_path = os.path.join(config.PLOT_DIR, filename)
     plt.savefig(out_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved: {filename}")
@@ -145,15 +128,15 @@ def main():
     model_lecp = train_specific_model(MODEL_B_NAME)
 
     print("--- Loading & Cropping Data ---")
-    pre_nbr, _ = read_tif("PreFire_NBR.tif")
-    rec_ndvi, _ = read_tif("Recovery_NDVI.tif")
-    post_nbr, _ = read_tif("PostFire_NBR.tif")
+    pre_nbr = read_tif("PreFire_NBR.tif")
+    rec_ndvi = read_tif("Recovery_NDVI.tif")
+    post_nbr = read_tif("PostFire_NBR.tif")
 
     dnbr = pre_nbr - post_nbr
     rbr_full = dnbr / (pre_nbr + 1.001)
 
     # Locate Fire Center
-    valid_burns = np.argwhere(rbr_full > 0.2)
+    valid_burns = np.argwhere(rbr_full > 0.5)
     if len(valid_burns) == 0:
         center_r, center_c = pre_nbr.shape[0] // 2, pre_nbr.shape[1] // 2
     else:
@@ -255,7 +238,7 @@ def main():
     cbar2.set_label("Error Reduction (Green = Better)")
 
     plt.suptitle(f"Model Analysis: {MODEL_B_NAME} Performance", fontsize=20, y=0.95)
-    out_file = os.path.join(config.BASE_DIR, "4_LECP_Analysis.png")
+    out_file = os.path.join(config.PLOT_DIR, "4_LECP_Analysis.png")
     plt.savefig(out_file, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Analysis saved to: {out_file}")

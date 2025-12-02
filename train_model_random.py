@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import seaborn as sns
 import matplotlib
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
@@ -45,7 +44,7 @@ def plot_feature_importance(model, feature_names):
     plt.gca().invert_yaxis()  # Highest importance on top
 
     plt.tight_layout()
-    out_path = os.path.join(config.BASE_DIR, "lecp_feature_importance.png")
+    out_path = os.path.join(config.PLOT_DIR, "lecp_feature_importance.png")
     plt.savefig(out_path, dpi=300)
     print(f"Graph saved: {out_path}")
     plt.show()
@@ -79,13 +78,13 @@ def plot_four_way_comparison(y_test, preds):
         plt.text(0.05, 0.9, f"R² = {r2:.3f}", transform=plt.gca().transAxes, fontsize=12, fontweight='bold')
 
     plt.tight_layout()
-    out_path = os.path.join(config.BASE_DIR, "four_way_comparison.png")
+    out_path = os.path.join(config.PLOT_DIR, "four_way_comparison.png")
     plt.savefig(out_path, dpi=300)
     print(f"Comparison Graph saved: {out_path}")
 
 
 def main():
-    data_path = os.path.join(config.BASE_DIR, "training_dataset.csv")
+    data_path = os.path.join(config.TIF_DIR, "training_dataset.csv")
     print(f"Loading dataset from {data_path}...")
     df = pd.read_csv(data_path)
 

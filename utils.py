@@ -17,9 +17,8 @@ def read_and_resample(path_10m_ref, path_target):
     with rasterio.open(path_target) as src:
         data = src.read(
             out_shape=out_shape,
-            resampling=Resampling.bilinear  # Bilinear is best for continuous data like B12
+            resampling=Resampling.bilinear
         )
-        # Scale the data if needed (Sentinel-2 JP2 is usually 0-10000 integers)
         data = data.astype('float32')
 
     return data[0], profile
@@ -46,8 +45,6 @@ def apply_mask(band_data, scl_data):
     Sets pixel values to NaN if the SCL indicates clouds/shadows.
     """
     # SCL Classes: 0 (No Data), 1 (Defect), 3 (Shadow), 8-10 (Clouds)
-    # Note: Class 6 is Water. We CAN use SCL=6 to mask water, but calculating NDWI manually
-    # is often more accurate for river edges than the coarse SCL.
     bad_pixels = np.isin(scl_data, [0, 1, 3, 8, 9, 10])
 
     masked_data = band_data.copy()
@@ -63,14 +60,12 @@ def apply_water_mask(band_data, ndwi_data, threshold=0.0):
     water_pixels = ndwi_data > threshold
 
     masked_data = band_data.copy()
-    # Apply NaN to water areas
     masked_data[water_pixels] = np.nan
     return masked_data
 
 
 def save_tif(filename, data, profile):
     """Saves the result as a GeoTIFF"""
-    # Update profile for float32 data (since we calculated indices)
     profile.update(
         dtype=rasterio.float32,
         count=1,

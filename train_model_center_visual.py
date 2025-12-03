@@ -46,8 +46,8 @@ def train_specific_model(model_type):
     rf = RandomForestRegressor(
         n_estimators=100,
         n_jobs=-1,
-        max_depth=25,  # Restricts depth slightly to prevent pure memorization
-        min_samples_leaf=4,  # Requires at least 4 pixels to agree before making a rule
+        max_depth=25,
+        min_samples_leaf=4,
         random_state=SEED
     )
     rf.fit(X, y)
@@ -60,39 +60,25 @@ def prepare_raster_features(crop_rbr, crop_pre_nbr, model_type):
     Transforms raw raster crops into the correct shape (N_samples, N_features)
     expected by the specific model type.
     """
-    # Handle NaNs (fill with 0 for prediction, masked later)
     input_rbr = np.nan_to_num(crop_rbr, nan=0.0)
     input_pre = np.nan_to_num(crop_pre_nbr, nan=0.0)
 
     H, W = input_rbr.shape
 
     if model_type == "Control3":
-        # Training data was: df[['Control_RBR', 'Control_PreNBR']]
-        # So we must stack RBR then Pre
         flat_rbr = input_rbr.reshape(-1, 1)
         flat_pre = input_pre.reshape(-1, 1)
         return np.hstack([flat_rbr, flat_pre])
 
     elif model_type == "LECP":
-        # 1. Get Sliding Windows (Shape: H, W, 3, 3)
         patches_pre = get_sliding_windows(input_pre, 3)
         patches_rbr = get_sliding_windows(input_rbr, 3)
 
-        # 2. Flatten the 3x3 window into 9 features per pixel
-        # Shape becomes: (N_pixels, 9)
         flat_pre_patches = patches_pre.reshape(H * W, 9)
         flat_rbr_patches = patches_rbr.reshape(H * W, 9)
 
-        # --- THE FIX ---
-        # The CSV was built interleaved: Pre_0, RBR_0, Pre_1, RBR_1...
-        # We must replicate that structure.
-
-        # Stack them along a new axis -> (N_pixels, 9, 2)
-        # Axis 2, index 0 is Pre, index 1 is RBR
         stacked = np.stack([flat_pre_patches, flat_rbr_patches], axis=2)
 
-        # Reshape to flatten the last two dimensions -> (N_pixels, 18)
-        # This forces the order: Pre0, RBR0, Pre1, RBR1...
         return stacked.reshape(H * W, 18)
 
 
@@ -136,7 +122,7 @@ def main():
     rbr_full = dnbr / (pre_nbr + 1.001)
 
     # Locate Fire Center
-    valid_burns = np.argwhere(rbr_full > 0.5)
+    valid_burns = np.argwhere(rbr_full > 0.2)
     if len(valid_burns) == 0:
         center_r, center_c = pre_nbr.shape[0] // 2, pre_nbr.shape[1] // 2
     else:

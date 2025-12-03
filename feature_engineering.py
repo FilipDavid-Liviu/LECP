@@ -19,10 +19,6 @@ def read_tif(filename):
 
 
 def get_sliding_windows(image, window_size=3):
-    """
-    Creates a view of the array where every pixel includes its 3x3 neighborhood.
-    Output shape: (Height, Width, 3, 3)
-    """
     # Pad the image so borders can also be centers of windows
     pad = window_size // 2
     padded_image = np.pad(image, pad_width=pad, mode='reflect')

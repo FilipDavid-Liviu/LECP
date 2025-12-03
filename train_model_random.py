@@ -102,8 +102,6 @@ def main():
     X_c3 = df[['Control_RBR', 'Control_PreNBR']]
 
     # Control 4: LECP (Hypothesis)
-    # We drop the explicit control columns to force it to use the 18 patch columns
-    # Note: The patch columns INCLUDE the center pixel info, so it has access to C3 info + neighbors
     X_c4 = df.drop(columns=['Target_RecoveryNDVI', 'Control_RBR', 'Control_PreNBR'])
 
     # --- SPLIT ---

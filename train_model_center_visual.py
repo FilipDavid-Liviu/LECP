@@ -1,4 +1,5 @@
 import matplotlib
+from numpy.lib.stride_tricks import sliding_window_view
 from sklearn.metrics import mean_squared_error, r2_score
 import matplotlib.pyplot as plt
 import numpy as np
@@ -7,7 +8,7 @@ from sklearn.ensemble import RandomForestRegressor
 import config
 import os
 import copy
-from feature_engineering import read_tif, get_sliding_windows
+from feature_engineering import read_tif
 matplotlib.use('Agg')
 
 # --- CONFIGURATION ---
@@ -16,6 +17,13 @@ SEED = 42
 
 MODEL_A_NAME = "Control3"
 MODEL_B_NAME = "LECP"
+
+
+def get_sliding_windows(image, window_size=3):
+    pad = window_size // 2
+    padded_image = np.pad(image, pad_width=pad, mode='reflect')
+    windows = sliding_window_view(padded_image, window_shape=(window_size, window_size))
+    return windows
 
 
 # --- 1. DATA LOADER ---

@@ -8,6 +8,7 @@ import config
 # --- CONFIGURATION ---
 SAMPLE_SIZE = 50000
 BURN_THRESHOLD = 0.1
+BLOCK_SIZE = 50
 
 
 def read_tif(filename):
@@ -18,14 +19,6 @@ def read_tif(filename):
         return data
 
 
-def get_sliding_windows(image, window_size=3):
-    # Pad the image so borders can also be centers of windows
-    pad = window_size // 2
-    padded_image = np.pad(image, pad_width=pad, mode='reflect')
-    windows = sliding_window_view(padded_image, window_shape=(window_size, window_size))
-    return windows
-
-
 if __name__ == "__main__":
     print("--- Loading TIF Data ---")
     pre_nbr = read_tif("PreFire_NBR.tif")
@@ -34,15 +27,12 @@ if __name__ == "__main__":
 
     print("--- Calculating Derived Metrics ---")
 
-    # 1. dNBR & RBR
     dnbr = pre_nbr - post_nbr
     rbr = dnbr / (pre_nbr + 1.001)
 
-    # 2. TARGET: Absolute Recovery State
     target_absolute = rec_ndvi
 
     print(f"--- Identifying Valid Pixels (Threshold > {BURN_THRESHOLD}) ---")
-
     valid_mask = (
             ~np.isnan(pre_nbr) &
             ~np.isnan(rbr) &
@@ -77,34 +67,37 @@ if __name__ == "__main__":
     lecp_rbr_features = np.zeros((len(sample_coords), 9), dtype=np.float32)
 
     control_rbr_list = []
-    control_prenbr_list = []  # NEW LIST
+    control_prenbr_list = []
     targets = []
+    block_ids = []
 
     for i, (r, c) in enumerate(sample_coords):
-        pr, pc = r + 1, c + 1
+        # 1. Spatial Block Assignment
+        # Divide pixel coordinates by BLOCK_SIZE to create a grid of IDs
+        block_r = r // BLOCK_SIZE
+        block_c = c // BLOCK_SIZE
+        # Create a unique integer or string ID for this geographic square
+        block_ids.append(f"B_{block_r}_{block_c}")
 
-        # Extract 3x3 window
+        # 2. Patch Extraction
+        pr, pc = r + 1, c + 1
         w_pre = pad_pre_nbr[pr - 1:pr + 2, pc - 1:pc + 2]
         w_rbr = pad_rbr[pr - 1:pr + 2, pc - 1:pc + 2]
 
-        # Flatten
         lecp_pre_features[i, :] = w_pre.flatten()
         lecp_rbr_features[i, :] = w_rbr.flatten()
 
-        # Store Controls and Target
         control_rbr_list.append(rbr[r, c])
-        control_prenbr_list.append(pre_nbr[r, c])  # Capture center Pre-Fire Pixel
+        control_prenbr_list.append(pre_nbr[r, c])
         targets.append(target_absolute[r, c])
 
     print("--- Building DataFrame ---")
     df = pd.DataFrame()
     df['Target_RecoveryNDVI'] = targets
+    df['Spatial_Block_ID'] = block_ids  # CRITICAL for GroupKFold
+    df['Control_RBR'] = control_rbr_list
+    df['Control_PreNBR'] = control_prenbr_list
 
-    # --- THE CONTROLS ---
-    df['Control_RBR'] = control_rbr_list  # Model A Input
-    df['Control_PreNBR'] = control_prenbr_list  # Model B Input (Added)
-
-    # --- THE LECP FEATURES ---
     for p_idx in range(9):
         df[f"PreNBR_P{p_idx}"] = lecp_pre_features[:, p_idx]
         df[f"RBR_P{p_idx}"] = lecp_rbr_features[:, p_idx]
@@ -113,4 +106,4 @@ if __name__ == "__main__":
 
     output_path = os.path.join(config.TIF_DIR, "training_dataset.csv")
     df.to_csv(output_path, index=False)
-    print(f"Success! Dataset with Extra Control saved to: {output_path}")
+    print(f"Success! Dataset with Spatial Blocks saved to: {output_path}")

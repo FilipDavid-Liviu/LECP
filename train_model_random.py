@@ -2,15 +2,13 @@ import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import train_test_split, GroupShuffleSplit
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import config
 import os
 matplotlib.use('Agg')
 
-# --- SETTINGS ---
-# Random seed for reproducibility
 SEED = 42
 
 
@@ -29,10 +27,6 @@ def evaluate_model(y_true, y_pred, model_name):
 
 
 def plot_feature_importance(model, feature_names):
-    """
-    Bar chart showing which features the Random Forest found most useful.
-    This validates the hypothesis that context matters.
-    """
     importances = model.feature_importances_
     indices = np.argsort(importances)[::-1]  # Sort descending
 
@@ -57,10 +51,10 @@ def plot_four_way_comparison(y_test, preds):
     p1, p2, p3, p4 = preds
 
     plots = [
-        (p1, "Control 1: RBR Only\n(Severity / Trauma)", "red"),
-        (p2, "Control 2: PreNBR Only\n(Initial Health / Memory)", "orange"),
-        (p3, "Control 3: RBR + PreNBR\n(Pixel-Level Combo)", "purple"),
-        (p4, "Control 4: LECP\n(Combo + Spatial Neighbors)", "blue")
+        (p1, "Control 1: RBR Only", "red"),
+        (p2, "Control 2: PreNBR Only", "orange"),
+        (p3, "Control 3: RBR + PreNBR", "purple"),
+        (p4, "Control 4: LECP (Spatial Context)", "blue")
     ]
 
     for i, (pred, title, color) in enumerate(plots):
@@ -68,12 +62,11 @@ def plot_four_way_comparison(y_test, preds):
         plt.scatter(y_test, pred, alpha=0.1, color=color, s=1)
         plt.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2)
         plt.title(title)
-        plt.xlabel("Actual Recovery")
-        plt.ylabel("Predicted Recovery")
+        plt.xlabel("Actual Recovery (NDVI)")
+        plt.ylabel("Predicted Recovery (NDVI)")
         plt.xlim(0, 1)
         plt.ylim(0, 1)
         plt.grid(True, alpha=0.3)
-
         r2 = r2_score(y_test, pred)
         plt.text(0.05, 0.9, f"R² = {r2:.3f}", transform=plt.gca().transAxes, fontsize=12, fontweight='bold')
 
@@ -88,62 +81,58 @@ def main():
     print(f"Loading dataset from {data_path}...")
     df = pd.read_csv(data_path)
 
+    # 1. Define Target and Groups
     y = df['Target_RecoveryNDVI']
+    groups = df['Spatial_Block_ID']
 
-    # --- DEFINE FEATURE SETS ---
-
-    # Control 1: RBR Only (Severity)
+    # 2. Define Feature Sets
     X_c1 = df[['Control_RBR']]
-
-    # Control 2: PreNBR Only (Memory)
     X_c2 = df[['Control_PreNBR']]
-
-    # Control 3: RBR + PreNBR (Pixel Combo)
     X_c3 = df[['Control_RBR', 'Control_PreNBR']]
+    # LECP uses all patch columns, excluding the target, block ID, and pixel-level controls
+    drop_cols = ['Target_RecoveryNDVI', 'Spatial_Block_ID', 'Control_RBR', 'Control_PreNBR']
+    X_c4 = df.drop(columns=drop_cols)
 
-    # Control 4: LECP (Hypothesis)
-    X_c4 = df.drop(columns=['Target_RecoveryNDVI', 'Control_RBR', 'Control_PreNBR'])
+    # 3. SPATIAL SPLIT (GroupShuffleSplit)
+    # This replaces train_test_split to prevent data leakage
+    print(f"Performing Spatial Split (GroupShuffleSplit) on {len(df['Spatial_Block_ID'].unique())} blocks...")
+    gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
+    train_idx, test_idx = next(gss.split(X_c4, y, groups=groups))
 
-    # --- SPLIT ---
-    print("Splitting data...")
-    X_train_c4, X_test_c4, y_train, y_test = train_test_split(
-        X_c4, y, test_size=0.2, random_state=SEED
-    )
+    # Apply indices to all feature sets and target
+    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
 
-    # Sync others
-    X_train_c1, X_test_c1 = X_c1.loc[X_train_c4.index], X_c1.loc[X_test_c4.index]
-    X_train_c2, X_test_c2 = X_c2.loc[X_train_c4.index], X_c2.loc[X_test_c4.index]
-    X_train_c3, X_test_c3 = X_c3.loc[X_train_c4.index], X_c3.loc[X_test_c4.index]
+    X_train_c1, X_test_c1 = X_c1.iloc[train_idx], X_c1.iloc[test_idx]
+    X_train_c2, X_test_c2 = X_c2.iloc[train_idx], X_c2.iloc[test_idx]
+    X_train_c3, X_test_c3 = X_c3.iloc[train_idx], X_c3.iloc[test_idx]
+    X_train_c4, X_test_c4 = X_c4.iloc[train_idx], X_c4.iloc[test_idx]
 
-    # --- TRAIN & EVALUATE ---
+    print(f"Train size: {len(y_train)} | Test size: {len(y_test)}")
 
-    print("\nTraining Control 1 (RBR Only)...")
-    rf1 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
-    rf1.fit(X_train_c1, y_train)
-    pred1 = rf1.predict(X_test_c1)
-    evaluate_model(y_test, pred1, "Control 1 (RBR Only)")
+    # 4. Train & Evaluate
+    models = [
+        (X_train_c1, X_test_c1, "Control 1 (RBR Only)"),
+        (X_train_c2, X_test_c2, "Control 2 (PreNBR Only)"),
+        (X_train_c3, X_test_c3, "Control 3 (Pixel Combo)"),
+        (X_train_c4, X_test_c4, "Control 4 (LECP)")
+    ]
 
-    print("\nTraining Control 2 (PreNBR Only)...")
-    rf2 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
-    rf2.fit(X_train_c2, y_train)
-    pred2 = rf2.predict(X_test_c2)
-    evaluate_model(y_test, pred2, "Control 2 (PreNBR Only)")
+    all_preds = []
+    final_lecp_model = None
 
-    print("\nTraining Control 3 (Pixel Combo)...")
-    rf3 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
-    rf3.fit(X_train_c3, y_train)
-    pred3 = rf3.predict(X_test_c3)
-    evaluate_model(y_test, pred3, "Control 3 (RBR + PreNBR)")
+    for X_tr, X_te, name in models:
+        print(f"\nTraining {name}...")
+        rf = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
+        rf.fit(X_tr, y_train)
+        preds = rf.predict(X_te)
+        evaluate_model(y_test, preds, name)
+        all_preds.append(preds)
 
-    print("\nTraining Control 4 (LECP)...")
-    rf4 = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4,random_state=SEED)
-    rf4.fit(X_train_c4, y_train)
-    pred4 = rf4.predict(X_test_c4)
-    evaluate_model(y_test, pred4, "Control 4 (LECP)")
+        if "LECP" in name:
+            final_lecp_model = rf
 
-    # --- PLOTTING ---
-    plot_four_way_comparison(y_test, (pred1, pred2, pred3, pred4))
-    plot_feature_importance(rf4, X_c4.columns)
+    plot_four_way_comparison(y_test, all_preds)
+    plot_feature_importance(final_lecp_model, X_c4.columns)
 
 
 if __name__ == "__main__":

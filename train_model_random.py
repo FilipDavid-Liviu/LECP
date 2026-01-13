@@ -1,8 +1,9 @@
+import joblib
 import pandas as pd
 import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
-from sklearn.model_selection import train_test_split, GroupShuffleSplit
+from sklearn.model_selection import GroupShuffleSplit, GroupKFold, GridSearchCV
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score, mean_squared_error, mean_absolute_error
 import config
@@ -24,6 +25,40 @@ def evaluate_model(y_true, y_pred, model_name):
     print(f"MAE:      {mae:.4f}")
     print("-" * 30)
     return r2, rmse, mae
+
+
+def tune_model(X_train, y_train, groups_train, model_name):
+    """
+    Finds the best hyperparameters for a given feature set
+    using Spatial Cross-Validation.
+    """
+    print(f"\n[Tuning] Optimizing {model_name} parameters...")
+
+    param_grid = {
+        'n_estimators': [100],  # Keep trees fixed during tuning to save time
+        'max_depth': [15, 25],
+        'min_samples_leaf': [5, 10],  # Higher values speed up training and reduce overfitting
+        'max_features': ['sqrt']
+    }
+
+    # GroupKFold ensures validation folds are entire geographic blocks
+    cv_spatial = GroupKFold(n_splits=3)
+
+    rf = RandomForestRegressor(random_state=SEED, n_jobs=-1)
+
+    grid_search = GridSearchCV(
+        estimator=rf,
+        param_grid=param_grid,
+        cv=cv_spatial,
+        scoring='r2',
+        n_jobs=-1,
+        verbose=1
+    )
+
+    grid_search.fit(X_train, y_train, groups=groups_train)
+
+    print(f"Best Params for {model_name}: {grid_search.best_params_}")
+    return grid_search.best_estimator_
 
 
 def plot_feature_importance(model, feature_names):
@@ -89,47 +124,42 @@ def main():
     X_c1 = df[['Control_RBR']]
     X_c2 = df[['Control_PreNBR']]
     X_c3 = df[['Control_RBR', 'Control_PreNBR']]
-    # LECP uses all patch columns, excluding the target, block ID, and pixel-level controls
     drop_cols = ['Target_RecoveryNDVI', 'Spatial_Block_ID', 'Control_RBR', 'Control_PreNBR']
     X_c4 = df.drop(columns=drop_cols)
 
-    # 3. SPATIAL SPLIT (GroupShuffleSplit)
-    # This replaces train_test_split to prevent data leakage
-    print(f"Performing Spatial Split (GroupShuffleSplit) on {len(df['Spatial_Block_ID'].unique())} blocks...")
     gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=SEED)
     train_idx, test_idx = next(gss.split(X_c4, y, groups=groups))
 
-    # Apply indices to all feature sets and target
-    y_train, y_test = y.iloc[train_idx], y.iloc[test_idx]
-
-    X_train_c1, X_test_c1 = X_c1.iloc[train_idx], X_c1.iloc[test_idx]
-    X_train_c2, X_test_c2 = X_c2.iloc[train_idx], X_c2.iloc[test_idx]
-    X_train_c3, X_test_c3 = X_c3.iloc[train_idx], X_c3.iloc[test_idx]
-    X_train_c4, X_test_c4 = X_c4.iloc[train_idx], X_c4.iloc[test_idx]
-
-    print(f"Train size: {len(y_train)} | Test size: {len(y_test)}")
-
-    # 4. Train & Evaluate
-    models = [
-        (X_train_c1, X_test_c1, "Control 1 (RBR Only)"),
-        (X_train_c2, X_test_c2, "Control 2 (PreNBR Only)"),
-        (X_train_c3, X_test_c3, "Control 3 (Pixel Combo)"),
-        (X_train_c4, X_test_c4, "Control 4 (LECP)")
+    feature_sets = [
+        (X_c1, "Control 1 (RBR)"),
+        (X_c2, "Control 2 (PreNBR)"),
+        (X_c3, "Control 3 (Pixel Combo)"),
+        (X_c4, "Control 4 (LECP)")
     ]
 
     all_preds = []
     final_lecp_model = None
+    y_test = y.iloc[test_idx]
+    groups_train = groups.iloc[train_idx]
 
-    for X_tr, X_te, name in models:
-        print(f"\nTraining {name}...")
-        rf = RandomForestRegressor(n_estimators=100, n_jobs=-1, min_samples_leaf=4, random_state=SEED)
-        rf.fit(X_tr, y_train)
-        preds = rf.predict(X_te)
+    for X_full, name in feature_sets:
+        X_train = X_full.iloc[train_idx]
+        X_test = X_full.iloc[test_idx]
+
+        # Optimize each model individually
+        best_model = tune_model(X_train, y.iloc[train_idx], groups_train, name)
+
+        # Predict on the held-out geographic blocks
+        preds = best_model.predict(X_test)
         evaluate_model(y_test, preds, name)
         all_preds.append(preds)
 
+        # Save specific models for visualizer or future use
         if "LECP" in name:
-            final_lecp_model = rf
+            final_lecp_model = best_model
+            joblib.dump(best_model, os.path.join(config.TIF_DIR, "best_lecp_model.joblib"))
+        elif "Pixel Combo" in name:
+            joblib.dump(best_model, os.path.join(config.TIF_DIR, "best_control3_model.joblib"))
 
     plot_four_way_comparison(y_test, all_preds)
     plot_feature_importance(final_lecp_model, X_c4.columns)

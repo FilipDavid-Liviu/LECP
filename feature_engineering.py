@@ -62,7 +62,6 @@ if __name__ == "__main__":
     pad_pre_nbr = np.pad(pre_nbr, pad_width=1, mode='reflect')
     pad_rbr = np.pad(rbr, pad_width=1, mode='reflect')
 
-    # Arrays to hold our features
     lecp_pre_features = np.zeros((len(sample_coords), 9), dtype=np.float32)
     lecp_rbr_features = np.zeros((len(sample_coords), 9), dtype=np.float32)
 
@@ -73,10 +72,8 @@ if __name__ == "__main__":
 
     for i, (r, c) in enumerate(sample_coords):
         # 1. Spatial Block Assignment
-        # Divide pixel coordinates by BLOCK_SIZE to create a grid of IDs
         block_r = r // BLOCK_SIZE
         block_c = c // BLOCK_SIZE
-        # Create a unique integer or string ID for this geographic square
         block_ids.append(f"B_{block_r}_{block_c}")
 
         # 2. Patch Extraction
@@ -94,7 +91,7 @@ if __name__ == "__main__":
     print("--- Building DataFrame ---")
     df = pd.DataFrame()
     df['Target_RecoveryNDVI'] = targets
-    df['Spatial_Block_ID'] = block_ids  # CRITICAL for GroupKFold
+    df['Spatial_Block_ID'] = block_ids
     df['Control_RBR'] = control_rbr_list
     df['Control_PreNBR'] = control_prenbr_list
 

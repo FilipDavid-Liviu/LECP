@@ -30,11 +30,10 @@ def get_sliding_windows(image, window_size=3):
 def prepare_raster_features(crop_rbr, crop_pre_nbr, model_type):
     """
     Transforms raw raster crops into features.
-    Crucially, we handle NaNs to avoid cloud-bias errors.
+    Handle NaNs to avoid cloud-bias errors.
     """
     mask = np.isnan(crop_rbr) | np.isnan(crop_pre_nbr)
 
-    # Fill NaNs with 0 only for the feature array, but we will mask them later
     input_rbr = np.nan_to_num(crop_rbr, nan=0.0)
     input_pre = np.nan_to_num(crop_pre_nbr, nan=0.0)
 
@@ -69,7 +68,6 @@ def save_single_map(data, title, filename, vmin=0, vmax=0.8):
 
 
 def main():
-    # 1. Load Pre-tuned Models
     print(f"--- Loading Tuned Models ---")
     model_control = joblib.load(os.path.join(config.TIF_DIR, MODEL_A_FILE))
     model_lecp = joblib.load(os.path.join(config.TIF_DIR, MODEL_B_FILE))
@@ -98,16 +96,13 @@ def main():
     crop_actual = rec_ndvi[r_s:r_e, c_s:c_e]
     H, W = crop_rbr.shape
 
-    # 2. Predict with Masking
     print("--- Generating Predictions ---")
-    # Prepare features and retrieve the NaN mask
     feats_cntrl, mask_cntrl = prepare_raster_features(crop_rbr, crop_pre, "control")
     pred_control = model_control.predict(feats_cntrl).reshape(H, W)
 
     feats_lecp, mask_lecp = prepare_raster_features(crop_rbr, crop_pre, "lecp")
     pred_lecp = model_lecp.predict(feats_lecp).reshape(H, W)
 
-    # 3. Apply Strict Masking for Visuals
     # Hide clouds AND unburnt areas (RBR < 0.1) from the final map
     final_mask = mask_lecp | (crop_rbr < 0.1) | np.isnan(crop_actual)
 
@@ -137,7 +132,6 @@ def main():
     actual_masked = crop_actual.copy()
     actual_masked[final_mask] = np.nan
 
-    # 4. Save Final Maps
     print("--- Saving Visual Comparison ---")
     save_single_map(actual_masked, "Ground Truth Recovery", "Visual_1_Actual.png")
     save_single_map(pred_control, "Control (Pixel-Only) Prediction", "Visual_2_Control.png")

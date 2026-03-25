@@ -35,9 +35,9 @@ def tune_model(X_train, y_train, groups_train, model_name):
     print(f"\n[Tuning] Optimizing {model_name} parameters...")
 
     param_grid = {
-        'n_estimators': [100],  # Keep trees fixed during tuning to save time
+        'n_estimators': [100],
         'max_depth': [15, 25],
-        'min_samples_leaf': [5, 10],  # Higher values speed up training and reduce overfitting
+        'min_samples_leaf': [5, 10],
         'max_features': ['sqrt']
     }
 
@@ -63,14 +63,14 @@ def tune_model(X_train, y_train, groups_train, model_name):
 
 def plot_feature_importance(model, feature_names):
     importances = model.feature_importances_
-    indices = np.argsort(importances)[::-1]  # Sort descending
+    indices = np.argsort(importances)[::-1]
 
     plt.figure(figsize=(10, 8))
     plt.title("LECP Feature Importance")
     plt.barh(range(len(indices)), importances[indices], align="center", color='green')
     plt.yticks(range(len(indices)), [feature_names[i] for i in indices])
     plt.xlabel("Relative Importance")
-    plt.gca().invert_yaxis()  # Highest importance on top
+    plt.gca().invert_yaxis()
 
     plt.tight_layout()
     out_path = os.path.join(config.PLOT_DIR, "lecp_feature_importance.png")
@@ -146,7 +146,6 @@ def main():
         X_train = X_full.iloc[train_idx]
         X_test = X_full.iloc[test_idx]
 
-        # Optimize each model individually
         best_model = tune_model(X_train, y.iloc[train_idx], groups_train, name)
 
         # Predict on the held-out geographic blocks
@@ -154,7 +153,6 @@ def main():
         evaluate_model(y_test, preds, name)
         all_preds.append(preds)
 
-        # Save specific models for visualizer or future use
         if "LECP" in name:
             final_lecp_model = best_model
             joblib.dump(best_model, os.path.join(config.TIF_DIR, "best_lecp_model.joblib"))
